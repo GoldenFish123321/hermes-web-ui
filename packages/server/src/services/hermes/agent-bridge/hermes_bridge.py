@@ -22,6 +22,7 @@ import threading
 import time
 import traceback
 import uuid
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +33,13 @@ from typing import Any
 DEFAULT_ENDPOINT = "tcp://127.0.0.1:18765" if os.name == "nt" else "ipc:///tmp/hermes-agent-bridge.sock"
 DEFAULT_AGENT_ROOT = "~/.hermes/hermes-agent"
 DEFAULT_HERMES_HOME = "~/.hermes"
+
+# Regex for detecting inline tool-call text produced by some models (e.g. DeepSeek)
+# when function calling degrades: [Calling tool: TOOL_NAME with arguments: {...}]
+_INLINE_TOOL_CALL_RE = re.compile(
+    r'\[Calling tool:\s*(\w+)\s+with\s+arguments:\s*(\{[^}]*?(?:\{[^}]*?\}[^}]*?)*\})\]',
+    re.DOTALL
+)
 
 
 def _bridge_platform() -> str:
@@ -990,6 +998,58 @@ class AgentPool:
         except Exception:
             return None
 
+    @staticmethod
+    def _sanitize_message_for_storage(msg: dict[str, Any]) -> dict[str, Any]:
+        """Sanitize an assistant message before persisting to session storage.
+
+        Detects inline tool-call text patterns like
+        ``[Calling tool: execute_code with arguments: {"code":"..."}]``
+        that some models produce when function calling degrades.  Converts them
+        into proper ``tool_calls`` entries so tools execute and the text does
+        not contaminate future conversation history.
+        """
+        if msg.get("role") != "assistant":
+            return msg
+        tool_calls = msg.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            return msg  # already has proper tool_calls — nothing to fix
+        content = msg.get("content")
+        if not isinstance(content, str) or not content.strip():
+            return msg
+
+        parsed: list[dict[str, Any]] = []
+        remaining = content
+        for m in _INLINE_TOOL_CALL_RE.finditer(content):
+            tool_name = m.group(1)
+            args_str = m.group(2)
+            try:
+                args = json.loads(args_str)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            call_id = m.group(0)[:80].encode().hex()[:24]  # deterministic per-call ID
+            parsed.append({
+                "id": call_id,
+                "call_id": call_id,
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "arguments": json.dumps(args),
+                },
+            })
+            remaining = remaining.replace(m.group(0), "", 1)
+
+        if not parsed:
+            return msg
+
+        # Strip the inline tool-call text from content
+        cleaned = _INLINE_TOOL_CALL_RE.sub("", content).strip()
+        return {
+            **msg,
+            "content": cleaned,
+            "tool_calls": parsed,
+            "finish_reason": "tool_calls",
+        }
+
     def _sync_result_tail_to_session_db(
         self,
         session: AgentSession,
@@ -1021,6 +1081,7 @@ class AgentPool:
         appended = 0
         for msg in generated:
             try:
+                msg = self._sanitize_message_for_storage(msg)
                 db.append_message(
                     session_id=session.session_id,
                     role=str(msg.get("role") or "assistant"),
@@ -1146,6 +1207,14 @@ class AgentPool:
                         profile,
                         db_count_after_prepersist,
                     )
+                    # Sanitize messages before storing in session history
+                    # to prevent inline tool-call text contamination
+                    raw_messages = result.get("messages")
+                    if isinstance(raw_messages, list):
+                        result["messages"] = [
+                            self._sanitize_message_for_storage(m) if isinstance(m, dict) else m
+                            for m in raw_messages
+                        ]
                     with session.lock:
                         if isinstance(result.get("messages"), list):
                             session.history = result["messages"]
