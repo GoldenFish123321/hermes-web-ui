@@ -1193,7 +1193,13 @@ class AgentPool:
                     )
                     if instructions:
                         kwargs["system_message"] = instructions
+                    # Sanitize conversation history to prevent inline
+                    # tool-call text from contaminating the model prompt
                     if conversation_history is not None:
+                        conversation_history = [
+                            self._sanitize_message_for_storage(m) if isinstance(m, dict) else m
+                            for m in conversation_history
+                        ]
                         kwargs["conversation_history"] = conversation_history
                     result = session.agent.run_conversation(
                         message,
