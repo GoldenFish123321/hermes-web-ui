@@ -8,7 +8,7 @@ import {
 } from '../../../db/hermes/session-store'
 import { getCompressionSnapshot } from '../../../db/hermes/compression-snapshot'
 import { ChatContextCompressor, SUMMARY_PREFIX } from '../../../lib/context-compressor'
-import { getModelContextLength } from '../model-context'
+import { getModelContextLength, getCompressionConfig } from '../model-context'
 import { logger } from '../../logger'
 import { bridgeLogger } from '../../logger'
 import { calcAndUpdateUsage, estimateUsageTokensFromMessages } from './usage'
@@ -102,7 +102,8 @@ export async function buildCompressedHistory(
     if (history.length === 0) return []
 
     const contextLength = getModelContextLength(profile)
-    const triggerTokens = Math.floor(contextLength / 2)
+    const compConfig = getCompressionConfig(profile)
+    const triggerTokens = Math.floor(contextLength * compConfig.threshold)
     const cState = getOrCreateSession(sessionMap, sessionId)
     const assembledTokens = await calcAndUpdateUsage(sessionId, cState, emit)
     const totalTokens = assembledTokens.inputTokens + assembledTokens.outputTokens

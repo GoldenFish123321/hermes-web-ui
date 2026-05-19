@@ -380,3 +380,30 @@ export function getModelContextLength(profile?: string): number {
   // 4. Fallback
   return DEFAULT_CONTEXT_LENGTH
 }
+
+/**
+ * Read compression config from config.yaml.
+ * Returns threshold ratio (0.5 = 50%), target_ratio, protect_last_n,
+ * hygiene_hard_message_limit, and protect_first_n.
+ * All with sensible defaults if config not present.
+ */
+export function getCompressionConfig(profile?: string): {
+  threshold: number
+  targetRatio: number
+  protectLastN: number
+  protectFirstN: number
+  hygieneHardMessageLimit: number
+} {
+  const profileDir = getProfileDir(profile)
+  const config = loadConfig(profileDir)
+  const compression = config?.compression || {}
+  return {
+    threshold: (typeof compression.threshold === 'number' && compression.threshold > 0 && compression.threshold <= 1)
+      ? compression.threshold : 0.5,
+    targetRatio: (typeof compression.target_ratio === 'number' && compression.target_ratio > 0 && compression.target_ratio <= 1)
+      ? compression.target_ratio : 0.2,
+    protectLastN: typeof compression.protect_last_n === 'number' ? compression.protect_last_n : 20,
+    protectFirstN: typeof compression.protect_first_n === 'number' ? compression.protect_first_n : 3,
+    hygieneHardMessageLimit: typeof compression.hygiene_hard_message_limit === 'number' ? compression.hygiene_hard_message_limit : 400,
+  }
+}
