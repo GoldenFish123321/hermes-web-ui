@@ -407,3 +407,15 @@ export function getCompressionConfig(profile?: string): {
     hygieneHardMessageLimit: typeof compression.hygiene_hard_message_limit === 'number' ? compression.hygiene_hard_message_limit : 400,
   }
 }
+/**
+ * Check if compression is enabled for the given profile.
+ * Reads `compression.enabled` from the profile's config.yaml.
+ * Defaults to true if the config key is not set.
+ */
+export function isCompressionEnabled(profile?: string): boolean {
+  const profileDir = getProfileDir(profile)
+  const config = loadConfig(profileDir)
+  if (!config) return true
+  // Default to enabled if not explicitly set
+  return config.compression?.enabled !== false
+}
