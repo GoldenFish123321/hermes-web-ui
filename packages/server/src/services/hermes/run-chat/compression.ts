@@ -8,7 +8,7 @@ import {
 } from '../../../db/hermes/session-store'
 import { getCompressionSnapshot } from '../../../db/hermes/compression-snapshot'
 import { ChatContextCompressor, SUMMARY_PREFIX } from '../../../lib/context-compressor'
-import { getModelContextLength } from '../model-context'
+import { getModelContextLength, isCompressionEnabled } from '../model-context'
 import { logger } from '../../logger'
 import { bridgeLogger } from '../../logger'
 import { calcAndUpdateUsage, estimateUsageTokensFromMessages } from './usage'
@@ -100,6 +100,12 @@ export async function buildCompressedHistory(
   try {
     let history = await buildDbHistory(sessionId, { excludeLastUser: true })
     if (history.length === 0) return []
+
+    // Respect compression.enabled in profile config
+    if (!isCompressionEnabled(profile)) {
+      logger.info('[context-compress] session=%s: compression disabled by config, returning raw history', sessionId)
+      return history
+    }
 
     const contextLength = getModelContextLength(profile)
     const triggerTokens = Math.floor(contextLength / 2)
