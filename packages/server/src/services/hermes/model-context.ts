@@ -380,3 +380,15 @@ export function getModelContextLength(profile?: string): number {
   // 4. Fallback
   return DEFAULT_CONTEXT_LENGTH
 }
+/**
+ * Check if compression is enabled for the given profile.
+ * Reads `compression.enabled` from the profile's config.yaml.
+ * Defaults to true if the config key is not set.
+ */
+export function isCompressionEnabled(profile?: string): boolean {
+  const profileDir = getProfileDir(profile)
+  const config = loadConfig(profileDir)
+  if (!config) return true
+  // Default to enabled if not explicitly set
+  return config.compression?.enabled !== false
+}
