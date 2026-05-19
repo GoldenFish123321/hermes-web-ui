@@ -593,11 +593,17 @@ class AgentPool:
                     existing.last_used_at = time.time()
                     return existing
 
-            _ensure_agent_imports()
-            _suppress_bridge_platform_hint()
-            from run_agent import AIAgent
+            from run_agent import AIAgent  # forward declaration
 
             with _profile_env(profile):
+                # Set HERMES_HOME to the profile directory *before* any lazy imports
+                # that trigger model_tools.discover_builtin_tools() which imports
+                # all tool modules (including skill_manager_tool.py) at module scope.
+                # Without this, SKILLS_DIR in skill_manager_tool is frozen to the
+                # root ~/.hermes/skills/ instead of the profile's skills/ directory.
+                _ensure_agent_imports()
+                _suppress_bridge_platform_hint()
+
                 # Re-bridge terminal config from the profile's config.yaml so that
                 # the agent and terminal_tool see the correct backend (e.g. ssh).
                 _refresh_terminal_env()
