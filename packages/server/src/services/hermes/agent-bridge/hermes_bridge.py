@@ -603,6 +603,19 @@ class AgentPool:
                 _suppress_bridge_platform_hint()
                 from run_agent import AIAgent  # must be inside with, _profile_env first
 
+                # Fix frozen SKILLS_DIR in cached tool modules.
+                # Bridge is a long-lived process; the first get_or_create()
+                # for any profile triggers model_tools.discover_builtin_tools()
+                # which imports skill_manager_tool.py (and friends) at module scope.
+                # Once in sys.modules, SKILLS_DIR never changes on its own.
+                from hermes_constants import get_skills_dir
+                sd = get_skills_dir()
+                import tools.skill_manager_tool as _skm
+                import tools.skills_hub as _shub
+                import tools.skills_tool as _st
+                import tools.skills_sync as _ss
+                _skm.SKILLS_DIR = _shub.SKILLS_DIR = _st.SKILLS_DIR = _ss.SKILLS_DIR = sd
+
                 # Re-bridge terminal config from the profile's config.yaml so that
                 # the agent and terminal_tool see the correct backend (e.g. ssh).
                 _refresh_terminal_env()
