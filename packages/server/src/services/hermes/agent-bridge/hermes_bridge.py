@@ -593,8 +593,6 @@ class AgentPool:
                     existing.last_used_at = time.time()
                     return existing
 
-            from run_agent import AIAgent  # forward declaration
-
             with _profile_env(profile):
                 # Set HERMES_HOME to the profile directory *before* any lazy imports
                 # that trigger model_tools.discover_builtin_tools() which imports
@@ -603,6 +601,7 @@ class AgentPool:
                 # root ~/.hermes/skills/ instead of the profile's skills/ directory.
                 _ensure_agent_imports()
                 _suppress_bridge_platform_hint()
+                from run_agent import AIAgent  # must be inside with, _profile_env first
 
                 # Re-bridge terminal config from the profile's config.yaml so that
                 # the agent and terminal_tool see the correct backend (e.g. ssh).
