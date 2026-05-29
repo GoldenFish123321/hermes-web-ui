@@ -19,7 +19,7 @@ import { readSseFrames } from './sse-utils'
 import { extractResponseText } from './response-utils'
 import { applyResponseStreamEvent, flushResponseRunToDb } from './response-stream'
 import { buildCompressedHistory, buildDbHistory, buildSnapshotAwareHistory, getOrCreateSession } from './compression'
-import { calcAndUpdateUsage, estimateUsageTokensFromMessages } from './usage'
+import { estimateUsageTokensFromMessages } from './usage'
 import { handleMessage } from './message-format'
 import { countTokens, SUMMARY_PREFIX } from '../../../lib/context-compressor'
 import { getCompressionSnapshot } from '../../../db/hermes/compression-snapshot'
@@ -248,14 +248,14 @@ export async function handleApiRun(
     if (!res.ok) {
       const text = await res.text().catch(() => '')
       const queueLen = session_id ? sessionMap.get(session_id)?.queue?.length ?? 0 : 0
-      if (session_id) await markApiCompleted(nsp, socket, session_id, sessionMap, { event: 'run.failed' })
+      if (session_id) await markApiCompleted(session_id, sessionMap, { event: 'run.failed' })
       emit('run.failed', { event: 'run.failed', error: `Upstream ${res.status}: ${text}`, queue_remaining: queueLen })
       if (session_id && queueLen > 0) dequeueNextQueuedRun(socket, session_id)
       return
     }
     if (!res.body) {
       const queueLen = session_id ? sessionMap.get(session_id)?.queue?.length ?? 0 : 0
-      if (session_id) await markApiCompleted(nsp, socket, session_id, sessionMap, { event: 'run.failed' })
+      if (session_id) await markApiCompleted(session_id, sessionMap, { event: 'run.failed' })
       emit('run.failed', { event: 'run.failed', error: 'Upstream response stream missing', queue_remaining: queueLen })
       if (session_id && queueLen > 0) dequeueNextQueuedRun(socket, session_id)
       return
@@ -307,7 +307,7 @@ export async function handleApiRun(
         const nextQueuedRun = session_id && queueLen > 0
           ? sessionMap.get(session_id)?.queue?.[0]
           : undefined
-        if (session_id) await markApiCompleted(nsp, socket, session_id, sessionMap, {
+        if (session_id) await markApiCompleted(session_id, sessionMap, {
           event: upstreamEvent === 'response.completed' ? 'run.completed' : 'run.failed',
           run_id: responseId,
           keepWorking: Boolean(nextQueuedRun),
@@ -315,14 +315,16 @@ export async function handleApiRun(
         })
         const finalOutput = parsed.response || parsed
         const finalText = extractResponseText(finalOutput)
+        const rawUsage = finalOutput.usage || {}
+        const apiInputTokens = rawUsage.input_tokens ?? rawUsage.inputTokens ?? 0
+        const apiOutputTokens = rawUsage.output_tokens ?? rawUsage.outputTokens ?? 0
         if (upstreamEvent === 'response.completed' && session_id) {
-          const usage = finalOutput.usage || {}
           updateUsage(session_id, {
-            inputTokens: usage.input_tokens ?? usage.inputTokens ?? 0,
-            outputTokens: usage.output_tokens ?? usage.outputTokens ?? 0,
-            cacheReadTokens: usage.cache_read_tokens ?? usage.cacheReadTokens ?? 0,
-            cacheWriteTokens: usage.cache_write_tokens ?? usage.cacheWriteTokens ?? 0,
-            reasoningTokens: usage.reasoning_tokens ?? usage.reasoningTokens ?? 0,
+            inputTokens: apiInputTokens,
+            outputTokens: apiOutputTokens,
+            cacheReadTokens: rawUsage.cache_read_tokens ?? rawUsage.cacheReadTokens ?? 0,
+            cacheWriteTokens: rawUsage.cache_write_tokens ?? rawUsage.cacheWriteTokens ?? 0,
+            reasoningTokens: rawUsage.reasoning_tokens ?? rawUsage.reasoningTokens ?? 0,
             model: finalOutput.model || '',
             profile: sessionMap.get(session_id)?.profile,
           })
@@ -334,6 +336,8 @@ export async function handleApiRun(
           response_id: responseId || finalOutput.id,
           output: finalText,
           usage: finalOutput.usage,
+          inputTokens: apiInputTokens,
+          outputTokens: apiOutputTokens,
           error: finalOutput.error || parsed.error,
           queue_remaining: queueLen,
         })
@@ -349,7 +353,7 @@ export async function handleApiRun(
       }, '[chat-run-socket] suppressing stale API stream end')
       return
     }
-    if (session_id) await markApiCompleted(nsp, socket, session_id, sessionMap, { event: 'run.failed', run_id: responseId })
+    if (session_id) await markApiCompleted(session_id, sessionMap, { event: 'run.failed', run_id: responseId })
     emit('run.failed', {
       event: 'run.failed',
       run_id: responseId,
@@ -370,7 +374,7 @@ export async function handleApiRun(
         }, '[chat-run-socket] suppressing stale/aborted API stream error')
         return
       }
-      void markApiCompleted(nsp, socket, session_id, sessionMap, { event: 'run.failed' }).then(() => {
+      void markApiCompleted(session_id, sessionMap, { event: 'run.failed' }).then(() => {
         emit('run.failed', { event: 'run.failed', error: err.message, queue_remaining: queueLen })
         if (queueLen > 0) dequeueNextQueuedRun(socket, session_id)
       })
@@ -381,8 +385,6 @@ export async function handleApiRun(
 }
 
 async function markApiCompleted(
-  nsp: ReturnType<Server['of']>,
-  _socket: Socket,
   sessionId: string,
   sessionMap: Map<string, SessionState>,
   info: { event: string; run_id?: string; keepWorking?: boolean; nextSource?: ChatRunSource },
@@ -409,9 +411,5 @@ async function markApiCompleted(
       state.profile = undefined
     }
     updateSessionStats(sessionId)
-    const emit = (event: string, payload: any) => {
-      nsp.to(`session:${sessionId}`).emit(event, { ...payload, session_id: sessionId })
-    }
-    await calcAndUpdateUsage(sessionId, state, emit)
   }
 }
